@@ -66,6 +66,12 @@
 *******************************************************************************/
 cy_stc_scb_ezi2c_context_t ezi2c_context;
 
+#if CY_CAPSENSE_BIST_EN
+/* Variables to hold electrode parasitic capacitances */
+uint32_t tx0_cp = 0, tx1_cp = 0, rx0_cp = 0, rx1_cp = 0;
+cy_en_capsense_bist_status_t tx0_cp_status, tx1_cp_status, rx0_cp_status, rx1_cp_status;
+#endif /* CY_CAPSENSE_BIST_EN */
+
 
 /*******************************************************************************
 * Function Prototypes
@@ -76,7 +82,10 @@ static void capsense_msc1_isr(void);
 static void ezi2c_isr(void);
 static void initialize_capsense_tuner(void);
 static void led_control(void);
-static void configure_pump(void);
+
+#if CY_CAPSENSE_BIST_EN
+static void measure_sensor_cp(void);
+#endif /* CY_CAPSENSE_BIST_EN */
 
 
 /*******************************************************************************
@@ -86,6 +95,7 @@ static void configure_pump(void);
 *  System entrance point. This function performs
 *  - initial setup of device
 *  - initialize CapSense
+*  - perform Cp measurement if Built-in Self test (BIST) is enabled
 *  - initialize tuner communication
 *  - scan touch input continuously
 *
@@ -115,6 +125,11 @@ int main(void)
     /* Initialize MSC CapSense */
     initialize_capsense();
 
+#if CY_CAPSENSE_BIST_EN
+    /* Measure the self capacitance of tx and rx electrodes using BIST */
+    measure_sensor_cp();
+#endif /* CY_CAPSENSE_BIST_EN */
+
     /* Start the first scan */
     Cy_CapSense_ScanAllSlots(&cy_capsense_context);
 
@@ -133,6 +148,9 @@ int main(void)
 
             /* Start the next scan */
             Cy_CapSense_ScanAllSlots(&cy_capsense_context);
+
+            /* Toggles GPIO for refresh rate measurement. Probe at P10.4 */
+            Cy_GPIO_Inv(CYBSP_SENSE_SCAN_RATE_PORT, CYBSP_SENSE_SCAN_RATE_NUM);
         }
     }
 }
@@ -164,9 +182,6 @@ static void initialize_capsense(void)
         .intrPriority = CAPSENSE_MSC1_INTR_PRIORITY,
     };
 
-    /* Configure the pump circuit for CapSense operation */
-    configure_pump();
-
     /* Capture the MSC HW block and initialize it to the default state. */
     status = Cy_CapSense_Init(&cy_capsense_context);
 
@@ -188,7 +203,9 @@ static void initialize_capsense(void)
 
     if(status != CY_CAPSENSE_STATUS_SUCCESS)
     {
-        CY_ASSERT(CY_ASSERT_FAILED);
+        /* This status could fail before tuning the sensors correctly.
+         * Ensure that this function passes after the CapSense sensors are tuned
+         * as per procedure give in the Readme.md file */
     }
 }
 
@@ -210,7 +227,7 @@ static void capsense_msc0_isr(void)
 * Function Name: capsense_msc1_isr
 ********************************************************************************
 * Summary:
-* Wrapper function for handling interrupts from CapSense MSC1 block.
+*  Wrapper function for handling interrupts from CapSense MSC1 block.
 *
 *******************************************************************************/
 static void capsense_msc1_isr(void)
@@ -223,7 +240,7 @@ static void capsense_msc1_isr(void)
 * Function Name: initialize_capsense_tuner
 ********************************************************************************
 * Summary:
-* - EZI2C module to communicate with the CapSense Tuner tool.
+* EZI2C module to communicate with the CapSense Tuner tool.
 *
 *******************************************************************************/
 static void initialize_capsense_tuner(void)
@@ -265,7 +282,7 @@ static void initialize_capsense_tuner(void)
 * Function Name: led_control
 ********************************************************************************
 * Summary:
-* Turns LED ON/OFF based on button status
+* Turning LED ON/OFF based on button status
 *
 *******************************************************************************/
 static void led_control(void)
@@ -294,7 +311,7 @@ static void led_control(void)
 * Function Name: ezi2c_isr
 ********************************************************************************
 * Summary:
-*  Wrapper function for handling interrupts from EZI2C block.
+* Wrapper function for handling interrupts from EZI2C block.
 *
 *******************************************************************************/
 static void ezi2c_isr(void)
@@ -303,33 +320,37 @@ static void ezi2c_isr(void)
 }
 
 
+#if CY_CAPSENSE_BIST_EN
 /*******************************************************************************
-* Function Name: configure_pump
+* Function Name: measure_sensor_cp
 ********************************************************************************
 * Summary:
-* Configure the pump circuit for CapSense operation. Pump needs to be enabled
-* when VDDA <= 4V. This is a workaround and it will be addressed in future
-* releases of PDL (CY_ID: 4762)
+*  Measures the self capacitance of Tx and Rx electrodes in Femto Farads and
+*  store its value.
 *
 *******************************************************************************/
-static void configure_pump(void)
+static void measure_sensor_cp(void)
 {
-    #define CY_PUMP_VDDA_VOLTAGE_MV (4000u)
+    /* Measure the self capacitance of Tx 0 electrode */
+    tx0_cp_status = Cy_CapSense_MeasureCapacitanceSensorElectrode(CY_CAPSENSE_BUTTON0_WDGT_ID,
+                                                  CY_CAPSENSE_BUTTON0_TX0_ID, &cy_capsense_context);
+    tx0_cp = cy_capsense_context.ptrWdConfig[CY_CAPSENSE_BUTTON0_WDGT_ID].ptrEltdCapacitance[CY_CAPSENSE_BUTTON0_TX0_ID];
 
-    #if (defined (srss_0_power_0_ENABLED)) && (srss_0_power_0_ENABLED == 1)
-        if (CY_PUMP_VDDA_VOLTAGE_MV >= CY_CFG_PWR_VDDA_MV)
-            {
-                /* SRSSLT register write to use main IMO output for pump */
-                SRSSLT_CLK_SELECT |= (1u << SRSSLT_CLK_SELECT_PUMP_SEL_Pos);
-                /* Setting Up the pump in HSIOM */
-                HSIOM->PUMP_CTL |= (1u << HSIOM_PUMP_CTL_ENABLED_Pos);
-            }
-    #else
-        /* If the below error is thrown during build and compile. Enable and
-         * specify VDDA in Power settings on the Device Configurator. For more
-         * details refer to readme.md */
-        #error *** Configure VDDA in power settings ***;
-    #endif
+    /* Measure the self capacitance of Rx 0 electrode */
+    rx0_cp_status = Cy_CapSense_MeasureCapacitanceSensorElectrode(CY_CAPSENSE_BUTTON0_WDGT_ID,
+                                                  CY_CAPSENSE_BUTTON0_RX0_ID, &cy_capsense_context);
+    rx0_cp = cy_capsense_context.ptrWdConfig[CY_CAPSENSE_BUTTON0_WDGT_ID].ptrEltdCapacitance[CY_CAPSENSE_BUTTON0_RX0_ID];
+
+    /* Measure the self capacitance of Tx 1 electrode */
+    tx1_cp_status = Cy_CapSense_MeasureCapacitanceSensorElectrode(CY_CAPSENSE_BUTTON1_WDGT_ID,
+                                                  CY_CAPSENSE_BUTTON1_TX0_ID, &cy_capsense_context);
+    tx1_cp = cy_capsense_context.ptrWdConfig[CY_CAPSENSE_BUTTON1_WDGT_ID].ptrEltdCapacitance[CY_CAPSENSE_BUTTON1_TX0_ID];
+
+    /* Measure the self capacitance of Rx 1 electrode */
+    rx1_cp_status = Cy_CapSense_MeasureCapacitanceSensorElectrode(CY_CAPSENSE_BUTTON1_WDGT_ID,
+                                                  CY_CAPSENSE_BUTTON1_RX0_ID, &cy_capsense_context);
+    rx1_cp = cy_capsense_context.ptrWdConfig[CY_CAPSENSE_BUTTON1_WDGT_ID].ptrEltdCapacitance[CY_CAPSENSE_BUTTON1_RX0_ID];
 }
+#endif /* CY_CAPSENSE_BIST_EN */
 
 /* [] END OF FILE */
