@@ -7,7 +7,7 @@
 * Related Document: See README.md
 *
 *******************************************************************************
-* Copyright 2021-2022, Cypress Semiconductor Corporation (an Infineon company) or
+* Copyright 2021-2023, Cypress Semiconductor Corporation (an Infineon company) or
 * an affiliate of Cypress Semiconductor Corporation.  All rights reserved.
 *
 * This software, including source code, documentation and related
@@ -62,8 +62,8 @@
 
 
 /*******************************************************************************
-* Global Definitions
-*******************************************************************************/
+* Global Variables
+********************************************************************************/
 cy_stc_scb_ezi2c_context_t ezi2c_context;
 
 #if CY_CAPSENSE_BIST_EN
